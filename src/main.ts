@@ -172,7 +172,14 @@ class App {
       const k = this.currentParams["k"] as number;
       const n = this.currentParams["n"] as number;
       if (k > n) {
-        this.currentParams["k"] = n;
+        // k を上げた場合は n を引き上げ、n を下げた場合は k を引き下げ
+        const nParam = this.currentManifold.defaultParams.find(p => p.key === "n");
+        const nMax = (nParam?.max as number) ?? 8;
+        if (k <= nMax) {
+          this.currentParams["n"] = k;
+        } else {
+          this.currentParams["k"] = n;
+        }
         this.renderParamsPanel();
       }
     }

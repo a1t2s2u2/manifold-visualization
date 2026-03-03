@@ -1,11 +1,8 @@
 import type { ManifoldDefinition } from "../types";
 import { stiefel } from "./stiefel";
 import { grassmann } from "./grassmann";
-import { sphere } from "./sphere";
-import { torus } from "./torus";
-import { kleinBottle } from "./kleinBottle";
-import { mobiusStrip } from "./mobiusStrip";
 import { so3 } from "./so3";
+import { sphere } from "./sphere";
 import { realProjective } from "./realProjective";
 
 export const manifolds: ManifoldDefinition[] = [
@@ -13,8 +10,5 @@ export const manifolds: ManifoldDefinition[] = [
   grassmann,
   so3,
   sphere,
-  torus,
   realProjective,
-  kleinBottle,
-  mobiusStrip,
 ];
