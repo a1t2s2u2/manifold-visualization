@@ -381,7 +381,7 @@ export const stiefel: ManifoldDefinition = {
       label: "サンプル数",
       type: "range",
       min: 100,
-      max: 5000,
+      max: 20000,
       step: 100,
       value: 1500,
     },

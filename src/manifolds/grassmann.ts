@@ -165,7 +165,7 @@ export const grassmann: ManifoldDefinition = {
       label: "サンプル数",
       type: "range",
       min: 200,
-      max: 5000,
+      max: 20000,
       step: 100,
       value: 2000,
     },

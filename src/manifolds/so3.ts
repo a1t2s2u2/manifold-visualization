@@ -102,7 +102,7 @@ export const so3: ManifoldDefinition = {
       label: "サンプル数",
       type: "range",
       min: 200,
-      max: 8000,
+      max: 20000,
       step: 200,
       value: 3000,
     },
