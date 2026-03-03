@@ -88,6 +88,13 @@ def stiefel_retract_qr(W: torch.Tensor) -> torch.Tensor:
     return Q.T
 
 
+def sample_tangent_perturbation(W: torch.Tensor, scale: float) -> torch.Tensor:
+    """Sample a random tangent vector at W and retract to get a nearby point on St(p,n)."""
+    Z = torch.randn_like(W) * scale
+    Z_tan = stiefel_project_tangent(W, Z)
+    return stiefel_retract_qr(W + Z_tan)
+
+
 # ============================================================
 # Training
 # ============================================================
@@ -199,37 +206,67 @@ def train():
     print(f"\nFinal test accuracy: {final_accuracy:.4f}")
 
     # ============================================================
-    # Landscape sampling on St(10, 784)
+    # PCA on path → directed perturbations along PC directions
     # ============================================================
-    print("\nSampling loss landscape (2000 random points on St(10,784))...")
+    print("\nComputing PCA on optimization path...")
+    path_array = np.array(path_weights, dtype=np.float64)
+    path_mean = path_array.mean(axis=0)
+    path_centered = path_array - path_mean
+    pca = PCA(n_components=3, svd_solver="full")
+    pca.fit(path_centered)
+    pc_dirs = pca.components_  # (3, 7840)
+    explained_variance = pca.explained_variance_ratio_.tolist()
+    print(f"  PCA explained variance: {explained_variance}")
+
+    # Project path to 3D (manual matmul to avoid sklearn overflow with large matrices)
+    path_3d = (path_centered @ pc_dirs.T).tolist()
+
+    # ============================================================
+    # Landscape sampling: perturbations along PCA directions
+    # ============================================================
+    print("\nSampling loss landscape (2000 points around optimization path)...")
     n_landscape = 2000
     landscape_weights: list[np.ndarray] = []
     landscape_losses_list: list[float] = []
 
+    path_tensors = [torch.from_numpy(w.reshape(10, 784)).float().to(device) for w in path_weights]
+    n_path = len(path_tensors)
+    # Convert PC directions to torch tensors (reshaped to 10x784)
+    pc_tensors = [torch.from_numpy(pc.reshape(10, 784)).float().to(device) for pc in pc_dirs]
+
+    rng = np.random.RandomState(42)
+    n_anchors = min(100, n_path)
+    anchor_step = max(1, n_path // n_anchors)
+    anchor_indices = list(range(0, n_path, anchor_step))
+    samples_per_anchor = n_landscape // len(anchor_indices) + 1
+
     with torch.no_grad():
-        for i in range(n_landscape):
-            W_rand = sample_stiefel(10, 784).to(device)
-            logits = landscape_images @ W_rand.T
-            loss_val = F.cross_entropy(logits, landscape_labels).item()
-            landscape_weights.append(W_rand.cpu().numpy().flatten())
-            landscape_losses_list.append(loss_val)
-            if (i + 1) % 500 == 0:
-                print(f"  {i + 1}/{n_landscape} points sampled")
+        count = 0
+        for anchor_idx in anchor_indices:
+            W_anchor = path_tensors[anchor_idx]
+            for _j in range(samples_per_anchor):
+                if count >= n_landscape:
+                    break
+                # Perturb along the 3 PC directions with random coefficients
+                coeffs = rng.randn(3) * 0.3
+                delta = sum(c * pc for c, pc in zip(coeffs, pc_tensors))
+                # Project to tangent space and retract
+                delta_tan = stiefel_project_tangent(W_anchor, delta)
+                W_perturbed = stiefel_retract_qr(W_anchor + delta_tan)
+                logits = landscape_images @ W_perturbed.T
+                loss_val = F.cross_entropy(logits, landscape_labels).item()
+                landscape_weights.append(W_perturbed.cpu().numpy().flatten())
+                landscape_losses_list.append(loss_val)
+                count += 1
+            if count >= n_landscape:
+                break
 
-    # ============================================================
-    # PCA projection to 3D
-    # ============================================================
-    print("\nComputing PCA projection to 3D...")
-    all_weights = np.array(landscape_weights + path_weights)  # (N_total, 7840)
-    pca = PCA(n_components=3)
-    all_projected = pca.fit_transform(all_weights)
+    print(f"  {len(landscape_weights)} points sampled")
 
-    n_land = len(landscape_weights)
-    landscape_3d = all_projected[:n_land].tolist()
-    path_3d = all_projected[n_land:].tolist()
-
-    explained_variance = pca.explained_variance_ratio_.tolist()
-    print(f"  PCA explained variance: {explained_variance}")
+    # Project landscape to same PCA space (manual matmul)
+    landscape_array = np.array(landscape_weights, dtype=np.float64)
+    landscape_centered = landscape_array - path_mean
+    landscape_3d = (landscape_centered @ pc_dirs.T).tolist()
 
     # ============================================================
     # JSON output

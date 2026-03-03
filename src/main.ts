@@ -9,7 +9,6 @@ class App {
   private scene: SceneManager;
   private data: MnistStiefelData | null = null;
   private showPath = true;
-  private pointSize = 0.06;
 
   constructor() {
     const canvas = document.getElementById("canvas") as HTMLCanvasElement;
@@ -104,34 +103,6 @@ class App {
     pathGroup.appendChild(pathInput);
     pathGroup.appendChild(pathLabel);
     container.appendChild(pathGroup);
-
-    // Point size slider
-    const sizeGroup = document.createElement("div");
-    sizeGroup.className = "param-group";
-    const sizeLabel = document.createElement("label");
-    sizeLabel.textContent = "点サイズ";
-    const sizeValueSpan = document.createElement("span");
-    sizeValueSpan.className = "param-value";
-    sizeValueSpan.textContent = this.pointSize.toFixed(2);
-    sizeLabel.appendChild(sizeValueSpan);
-
-    const sizeInput = document.createElement("input");
-    sizeInput.type = "range";
-    sizeInput.min = "0.02";
-    sizeInput.max = "0.2";
-    sizeInput.step = "0.01";
-    sizeInput.value = String(this.pointSize);
-    sizeInput.addEventListener("input", () => {
-      this.pointSize = parseFloat(sizeInput.value);
-      sizeValueSpan.textContent = this.pointSize.toFixed(2);
-    });
-    sizeInput.addEventListener("change", () => {
-      this.updateVisualization();
-    });
-
-    sizeGroup.appendChild(sizeLabel);
-    sizeGroup.appendChild(sizeInput);
-    container.appendChild(sizeGroup);
   }
 
   private renderInfoPanel(): void {
@@ -159,7 +130,6 @@ class App {
     removeLossChart();
     const obj = buildVisualization(this.data, {
       showPath: this.showPath,
-      pointSize: this.pointSize,
     });
     this.scene.setObject(obj);
     drawLossChart(this.data);

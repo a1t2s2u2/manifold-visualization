@@ -157,13 +157,12 @@ export function createColorBar(data: MnistStiefelData): THREE.Sprite {
  */
 export function buildVisualization(
   data: MnistStiefelData,
-  options: { showPath: boolean; pointSize: number }
+  options: { showPath: boolean }
 ): THREE.Group {
   const group = new THREE.Group();
 
   // Point cloud
   const cloud = createPointCloud(data);
-  (cloud.material as THREE.PointsMaterial).size = options.pointSize;
   group.add(cloud);
 
   // Color bar
