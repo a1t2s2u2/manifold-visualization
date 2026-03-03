@@ -1,6 +1,7 @@
 import "./style.css";
 import { SceneManager } from "./scene";
 import { manifolds } from "./manifolds";
+import { removeLossChart } from "./manifolds/stiefelLoss";
 import type { ManifoldDefinition } from "./types";
 
 class App {
@@ -167,6 +168,7 @@ class App {
     // Enforce k <= n for Stiefel/Grassmann
     if (
       this.currentManifold.id === "stiefel" ||
+      this.currentManifold.id === "stiefelLoss" ||
       this.currentManifold.id === "grassmann"
     ) {
       const k = this.currentParams["k"] as number;
@@ -182,6 +184,11 @@ class App {
         }
         this.renderParamsPanel();
       }
+    }
+
+    // Remove loss chart overlay if not on stiefelLoss
+    if (this.currentManifold.id !== "stiefelLoss") {
+      removeLossChart();
     }
 
     const obj = this.currentManifold.generate(this.currentParams);
