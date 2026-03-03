@@ -88,9 +88,8 @@ export class SceneManager {
 
     this.controls.update();
 
-    if (this.currentObject) {
-      this.currentObject.rotation.y += delta * 0.1;
-    }
+    // No per-frame object rotation for point cloud data
+    // Auto-rotate is handled by OrbitControls
 
     this.renderer.render(this.scene, this.camera);
 

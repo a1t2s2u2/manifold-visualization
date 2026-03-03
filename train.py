@@ -1,0 +1,272 @@
+"""
+MNIST × Stiefel多様体 学習スクリプト
+
+モデル: y = softmax(Wx + b), W ∈ St(10, 784)
+最適化: Riemannian SGD on Stiefel manifold
+出力: public/data/mnist_stiefel.json (PCA射影済み3D座標)
+"""
+
+import gzip
+import json
+import pathlib
+import struct
+import urllib.request
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+from sklearn.decomposition import PCA
+
+# ============================================================
+# MNIST data loading (no torchvision dependency)
+# ============================================================
+
+MNIST_URLS = {
+    "train_images": "https://storage.googleapis.com/cvdf-datasets/mnist/train-images-idx3-ubyte.gz",
+    "train_labels": "https://storage.googleapis.com/cvdf-datasets/mnist/train-labels-idx1-ubyte.gz",
+    "test_images": "https://storage.googleapis.com/cvdf-datasets/mnist/t10k-images-idx3-ubyte.gz",
+    "test_labels": "https://storage.googleapis.com/cvdf-datasets/mnist/t10k-labels-idx1-ubyte.gz",
+}
+
+
+def download_mnist(data_dir: pathlib.Path):
+    """Download MNIST dataset if not already cached."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    for name, url in MNIST_URLS.items():
+        filepath = data_dir / f"{name}.gz"
+        if not filepath.exists():
+            print(f"  Downloading {name}...")
+            urllib.request.urlretrieve(url, filepath)
+
+
+def load_mnist_images(filepath: pathlib.Path) -> torch.Tensor:
+    with gzip.open(filepath, "rb") as f:
+        _magic, n, rows, cols = struct.unpack(">IIII", f.read(16))
+        data = np.frombuffer(f.read(), dtype=np.uint8).reshape(n, rows * cols)
+    # Normalize: same as transforms.Normalize((0.1307,), (0.3081,))
+    images = torch.from_numpy(data.copy()).float() / 255.0
+    images = (images - 0.1307) / 0.3081
+    return images
+
+
+def load_mnist_labels(filepath: pathlib.Path) -> torch.Tensor:
+    with gzip.open(filepath, "rb") as f:
+        _magic, _n = struct.unpack(">II", f.read(8))
+        data = np.frombuffer(f.read(), dtype=np.uint8)
+    return torch.from_numpy(data.copy()).long()
+
+
+# ============================================================
+# Stiefel manifold utilities
+# ============================================================
+
+
+def sample_stiefel(p: int, n: int) -> torch.Tensor:
+    """Sample uniformly from St(p, n) via QR decomposition of Gaussian matrix."""
+    Z = torch.randn(p, n)
+    Q, R = torch.linalg.qr(Z.T)  # Q: (n, p)
+    # Fix sign ambiguity
+    Q = Q * torch.sign(torch.diag(R)).unsqueeze(0)
+    return Q.T  # (p, n)
+
+
+def stiefel_project_tangent(W: torch.Tensor, Z: torch.Tensor) -> torch.Tensor:
+    """Project Z onto the tangent space of St(p, n) at W.
+
+    proj_W(Z) = Z - W @ sym(W^T Z)
+    where sym(A) = (A + A^T) / 2
+    """
+    WtZ = W @ Z.T
+    sym = 0.5 * (WtZ + WtZ.T)
+    return Z - sym @ W
+
+
+def stiefel_retract_qr(W: torch.Tensor) -> torch.Tensor:
+    """Retract onto St(p, n) via QR decomposition."""
+    Q, R = torch.linalg.qr(W.T)
+    Q = Q * torch.sign(torch.diag(R)).unsqueeze(0)
+    return Q.T
+
+
+# ============================================================
+# Training
+# ============================================================
+
+
+def train():
+    device = torch.device("cpu")
+
+    # Download and load MNIST
+    data_dir = pathlib.Path("data/mnist")
+    print("Loading MNIST...")
+    download_mnist(data_dir)
+
+    train_images = load_mnist_images(data_dir / "train_images.gz").to(device)
+    train_labels = load_mnist_labels(data_dir / "train_labels.gz").to(device)
+    test_images = load_mnist_images(data_dir / "test_images.gz").to(device)
+    test_labels = load_mnist_labels(data_dir / "test_labels.gz").to(device)
+
+    print(f"  Train: {train_images.shape[0]} samples, Test: {test_images.shape[0]} samples")
+
+    # Subset for landscape evaluation (5000 samples)
+    landscape_indices = torch.randperm(train_images.shape[0])[:5000]
+    landscape_images = train_images[landscape_indices]
+    landscape_labels = train_labels[landscape_indices]
+
+    # Initialize W ∈ St(10, 784) and bias b
+    lr = 0.01
+    epochs = 10
+    batch_size = 128
+    W = sample_stiefel(10, 784).to(device).requires_grad_(False)
+    b = torch.zeros(10, device=device)
+
+    # Record optimization path
+    path_weights: list[np.ndarray] = []
+    path_losses: list[float] = []
+    epoch_losses: list[float] = []
+    epoch_accuracies: list[float] = []
+
+    step_count = 0
+    record_every = 5
+    n_train = train_images.shape[0]
+
+    print("Starting training...")
+    for epoch in range(epochs):
+        running_loss = 0.0
+        correct = 0
+        total = 0
+
+        # Shuffle
+        perm = torch.randperm(n_train)
+
+        for i in range(0, n_train, batch_size):
+            idx = perm[i : i + batch_size]
+            images = train_images[idx]
+            labels = train_labels[idx]
+
+            # Forward pass: y = softmax(Wx + b)
+            W_param = W.detach().requires_grad_(True)
+            b_param = b.detach().requires_grad_(True)
+            logits = images @ W_param.T + b_param
+            loss = F.cross_entropy(logits, labels)
+
+            # Compute Euclidean gradients
+            loss.backward()
+            eucl_grad_W = W_param.grad.detach()
+            eucl_grad_b = b_param.grad.detach()
+
+            # Riemannian gradient: project to tangent space of St(10, 784)
+            riem_grad = stiefel_project_tangent(W, eucl_grad_W)
+
+            # Update W via Riemannian SGD + QR retraction
+            W = W - lr * riem_grad
+            W = stiefel_retract_qr(W)
+
+            # Update b via standard SGD
+            b = b - lr * eucl_grad_b
+
+            # Track
+            running_loss += loss.item() * images.size(0)
+            pred = logits.argmax(dim=1)
+            correct += (pred == labels).sum().item()
+            total += images.size(0)
+
+            # Record path
+            if step_count % record_every == 0:
+                path_weights.append(W.detach().cpu().numpy().flatten())
+                path_losses.append(loss.item())
+            step_count += 1
+
+        epoch_loss = running_loss / total
+        epoch_acc = correct / total
+        epoch_losses.append(epoch_loss)
+        epoch_accuracies.append(epoch_acc)
+        print(f"  Epoch {epoch + 1}/{epochs}: loss={epoch_loss:.4f}, acc={epoch_acc:.4f}")
+
+        # Verify Stiefel constraint
+        WWT = W @ W.T
+        identity_error = torch.norm(WWT - torch.eye(10, device=device)).item()
+        print(f"    ||WW^T - I||_F = {identity_error:.6f}")
+
+    # Final evaluation
+    W_eval = W.detach()
+    b_eval = b.detach()
+    with torch.no_grad():
+        test_logits = test_images @ W_eval.T + b_eval
+        test_pred = test_logits.argmax(dim=1)
+        final_accuracy = (test_pred == test_labels).float().mean().item()
+    final_loss = epoch_losses[-1]
+    print(f"\nFinal test accuracy: {final_accuracy:.4f}")
+
+    # ============================================================
+    # Landscape sampling on St(10, 784)
+    # ============================================================
+    print("\nSampling loss landscape (2000 random points on St(10,784))...")
+    n_landscape = 2000
+    landscape_weights: list[np.ndarray] = []
+    landscape_losses_list: list[float] = []
+
+    with torch.no_grad():
+        for i in range(n_landscape):
+            W_rand = sample_stiefel(10, 784).to(device)
+            logits = landscape_images @ W_rand.T
+            loss_val = F.cross_entropy(logits, landscape_labels).item()
+            landscape_weights.append(W_rand.cpu().numpy().flatten())
+            landscape_losses_list.append(loss_val)
+            if (i + 1) % 500 == 0:
+                print(f"  {i + 1}/{n_landscape} points sampled")
+
+    # ============================================================
+    # PCA projection to 3D
+    # ============================================================
+    print("\nComputing PCA projection to 3D...")
+    all_weights = np.array(landscape_weights + path_weights)  # (N_total, 7840)
+    pca = PCA(n_components=3)
+    all_projected = pca.fit_transform(all_weights)
+
+    n_land = len(landscape_weights)
+    landscape_3d = all_projected[:n_land].tolist()
+    path_3d = all_projected[n_land:].tolist()
+
+    explained_variance = pca.explained_variance_ratio_.tolist()
+    print(f"  PCA explained variance: {explained_variance}")
+
+    # ============================================================
+    # JSON output
+    # ============================================================
+    output = {
+        "metadata": {
+            "model": "y = softmax(Wx + b), W ∈ St(10, 784)",
+            "epochs": epochs,
+            "learning_rate": lr,
+            "final_accuracy": round(final_accuracy, 4),
+            "final_loss": round(final_loss, 4),
+            "pca_explained_variance": [round(v, 6) for v in explained_variance],
+        },
+        "landscape": {
+            "points": [[round(c, 6) for c in p] for p in landscape_3d],
+            "losses": [round(l, 6) for l in landscape_losses_list],
+        },
+        "optimization_path": {
+            "points": [[round(c, 6) for c in p] for p in path_3d],
+            "losses": [round(l, 4) for l in path_losses],
+        },
+        "training_history": {
+            "epoch_losses": [round(l, 4) for l in epoch_losses],
+            "epoch_accuracies": [round(a, 4) for a in epoch_accuracies],
+        },
+    }
+
+    out_path = pathlib.Path("public/data/mnist_stiefel.json")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w") as f:
+        json.dump(output, f)
+
+    file_size = out_path.stat().st_size / 1024
+    print(f"\nSaved to {out_path} ({file_size:.1f} KB)")
+    print(f"  Landscape points: {len(landscape_3d)}")
+    print(f"  Path points: {len(path_3d)}")
+
+
+if __name__ == "__main__":
+    train()

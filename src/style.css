@@ -68,65 +68,62 @@ body {
   text-transform: uppercase;
 }
 
-#manifold-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.manifold-btn {
-  display: block;
-  width: 100%;
-  padding: 10px 14px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  color: var(--text-secondary);
-  font-family: "Noto Sans JP", sans-serif;
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.manifold-btn:hover {
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-  border-color: var(--border);
-}
-
-.manifold-btn.active {
-  background: var(--accent-glow);
-  color: var(--accent-light);
-  border-color: var(--accent);
-  font-weight: 500;
-}
-
-.manifold-btn .manifold-name {
-  display: block;
-  font-size: 14px;
-  margin-bottom: 2px;
-}
-
-.manifold-btn .manifold-math {
-  display: block;
-  font-family: "JetBrains Mono", monospace;
-  font-size: 11px;
-  opacity: 0.7;
-}
-
-#params-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-#params-panel h3 {
+/* Model info */
+#model-info h3,
+#controls-panel h3 {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 2px;
   color: var(--text-secondary);
-  margin-bottom: 4px;
+  margin-bottom: 10px;
+}
+
+.model-details {
+  background: var(--bg-tertiary);
+  border-radius: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+}
+
+.model-formula {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--accent-light);
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+
+.model-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stat-label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.stat-value {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 14px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* Controls */
+#controls-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .param-group {
@@ -174,22 +171,24 @@ body {
   transform: scale(1.2);
 }
 
-.param-group select {
-  padding: 6px 10px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-primary);
-  font-family: "Noto Sans JP", sans-serif;
-  font-size: 12px;
-  outline: none;
+.checkbox-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkbox-group input[type="checkbox"] {
+  accent-color: var(--accent);
   cursor: pointer;
 }
 
-.param-group select:focus {
-  border-color: var(--accent);
+.checkbox-group label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
 }
 
+/* Info panel */
 #info-panel {
   background: var(--bg-tertiary);
   border-radius: 10px;
@@ -221,6 +220,7 @@ body {
   margin-bottom: 8px;
 }
 
+/* Overlay info */
 #overlay-info {
   position: fixed;
   top: 12px;
@@ -234,19 +234,55 @@ body {
   pointer-events: none;
 }
 
-.checkbox-group {
+/* Loading overlay */
+#loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: var(--sidebar-width);
+  bottom: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
-}
-
-.checkbox-group input[type="checkbox"] {
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-
-.checkbox-group label {
-  font-size: 12px;
+  justify-content: center;
+  background: rgba(10, 10, 15, 0.85);
+  z-index: 20;
+  gap: 16px;
   color: var(--text-secondary);
-  cursor: pointer;
+  font-size: 14px;
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Error message */
+.error-message {
+  background: var(--bg-tertiary);
+  border-radius: 10px;
+  padding: 16px;
+  border: 1px solid #ff1744;
+}
+
+.error-message p {
+  font-size: 13px;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.error-detail {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
 }

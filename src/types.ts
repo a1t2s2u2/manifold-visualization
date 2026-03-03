@@ -1,27 +1,22 @@
-import type * as THREE from "three";
-
-export interface ManifoldParam {
-  key: string;
-  label: string;
-  type: "range" | "select" | "checkbox";
-  min?: number;
-  max?: number;
-  step?: number;
-  value: number | string | boolean;
-  options?: { label: string; value: string }[];
-}
-
-export interface ManifoldInfo {
-  name: string;
-  mathSymbol: string;
-  description: string;
-  dimension: string;
-  properties: string[];
-}
-
-export interface ManifoldDefinition {
-  id: string;
-  info: ManifoldInfo;
-  defaultParams: ManifoldParam[];
-  generate(params: Record<string, number | string | boolean>): THREE.Object3D;
+export interface MnistStiefelData {
+  metadata: {
+    model: string;
+    epochs: number;
+    learning_rate: number;
+    final_accuracy: number;
+    final_loss: number;
+    pca_explained_variance: number[];
+  };
+  landscape: {
+    points: [number, number, number][];
+    losses: number[];
+  };
+  optimization_path: {
+    points: [number, number, number][];
+    losses: number[];
+  };
+  training_history: {
+    epoch_losses: number[];
+    epoch_accuracies: number[];
+  };
 }
