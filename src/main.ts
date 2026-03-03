@@ -168,7 +168,6 @@ class App {
     // Enforce k <= n for Stiefel/Grassmann
     if (
       this.currentManifold.id === "stiefel" ||
-      this.currentManifold.id === "stiefelLoss" ||
       this.currentManifold.id === "grassmann"
     ) {
       const k = this.currentParams["k"] as number;
