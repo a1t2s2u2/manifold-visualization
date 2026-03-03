@@ -268,30 +268,43 @@ def train():
     print(f"  {len(local_weights)} points sampled")
 
     # ============================================================
-    # GLOBAL: uniform random on St(10, 784) with its own PCA
+    # GLOBAL: wider perturbations around path (scale=2.0 vs local 0.3)
+    # Same PCA space as local, but explores further from the path
     # ============================================================
-    print("\n[Global] Sampling 20000 uniform random points on St(10,784)...")
-    n_global = 20000
+    print("\n[Global] Sampling 8000 wide perturbation points around path...")
+    n_global = 8000
     global_weights: list[np.ndarray] = []
     global_losses: list[float] = []
 
+    rng_global = np.random.RandomState(123)
+    n_anchors_g = min(100, n_path)
+    anchor_step_g = max(1, n_path // n_anchors_g)
+    anchor_indices_g = list(range(0, n_path, anchor_step_g))
+    samples_per_anchor_g = n_global // len(anchor_indices_g) + 1
+
     with torch.no_grad():
-        for i in range(n_global):
-            W_rand = sample_stiefel(10, 784).to(device)
-            logits = landscape_images @ W_rand.T
-            loss_val = F.cross_entropy(logits, landscape_labels).item()
-            global_weights.append(W_rand.cpu().numpy().flatten())
-            global_losses.append(loss_val)
-            if (i + 1) % 2000 == 0:
-                print(f"  {i + 1}/{n_global} points sampled")
+        count_g = 0
+        for anchor_idx in anchor_indices_g:
+            W_anchor = path_tensors[anchor_idx]
+            for _j in range(samples_per_anchor_g):
+                if count_g >= n_global:
+                    break
+                coeffs = rng_global.randn(3) * 2.0  # wider than local (0.3)
+                delta = sum(c * pc for c, pc in zip(coeffs, pc_tensors))
+                delta_tan = stiefel_project_tangent(W_anchor, delta)
+                W_perturbed = stiefel_retract_qr(W_anchor + delta_tan)
+                logits = landscape_images @ W_perturbed.T
+                loss_val = F.cross_entropy(logits, landscape_labels).item()
+                global_weights.append(W_perturbed.cpu().numpy().flatten())
+                global_losses.append(loss_val)
+                count_g += 1
+            if count_g >= n_global:
+                break
 
-    # PCA on global points only — captures the internal structure of random samples
-    print("[Global] Computing PCA on global points...")
-    _, global_pcs, global_mean, global_variance = pca_project_3d(global_weights)
-    print(f"  PCA explained variance: {global_variance}")
-
-    global_landscape_3d = project_with(global_weights, global_pcs, global_mean)
-    global_path_3d = project_with(path_weights, global_pcs, global_mean)
+    # Use the same PCA as local (fitted on path) so both views share coordinates
+    global_landscape_3d = project_with(global_weights, local_pcs, local_mean)
+    global_path_3d = project_with(path_weights, local_pcs, local_mean)
+    global_variance = local_variance  # same PCA space
 
     # ============================================================
     # JSON output — each mode has its own PCA coordinate system

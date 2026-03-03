@@ -48,10 +48,10 @@ function createPointCloud(view: ViewData): THREE.Points {
   geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
 
   const mat = new THREE.PointsMaterial({
-    size: 0.12,
+    size: 0.09,
     vertexColors: true,
     transparent: true,
-    opacity: 0.75,
+    opacity: 0.8,
     sizeAttenuation: true,
   });
 

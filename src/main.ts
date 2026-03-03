@@ -96,8 +96,8 @@ class App {
 
     const modeSelect = document.createElement("select");
     const options: { value: LandscapeMode; label: string }[] = [
-      { value: "local", label: "パス周辺 (局所)" },
-      { value: "global", label: "全体 (グローバル)" },
+      { value: "local", label: "パス近傍 (狭域)" },
+      { value: "global", label: "パス広域 (広域)" },
     ];
     for (const opt of options) {
       const el = document.createElement("option");
@@ -147,10 +147,10 @@ class App {
         <p><strong>可視化要素:</strong></p>
         <p>・<span style="color:#4488ff">青</span>〜<span style="color:#ff4444">赤</span> 点群: St(10,784)上の点 (loss値で色付け)</p>
         <p>・<span style="color:#ffd700">金色</span>曲線: Riemannian SGDの最適化パス</p>
-        <p>・<span style="color:#ff1744">赤球</span>: 初期点, <span style="color:#00e676">緑球</span>: 最終点 (グローバルでは最終W位置のみ)</p>
+        <p>・<span style="color:#ff1744">赤球</span>: 初期点, <span style="color:#00e676">緑球</span>: 最終点</p>
         <p><strong>ランドスケープモード:</strong></p>
-        <p>・<strong>パス周辺</strong>: 最適化パスのPCA方向に沿った摂動点。パスと損失面の関係が見える</p>
-        <p>・<strong>全体</strong>: St(10,784)上の一様ランダム点。多様体全体の損失分布が見える (独自PCA空間)</p>
+        <p>・<strong>狭域</strong>: パス近傍の摂動 (σ=0.3)。最適化軌道と損失面の詳細な関係が見える</p>
+        <p>・<strong>広域</strong>: パス広域の摂動 (σ=2.0)。パスから離れた領域の損失構造が見える</p>
       </div>
     `;
   }

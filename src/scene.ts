@@ -116,9 +116,18 @@ export class SceneManager {
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);
-    const scale = 3 / maxDim;
+    const targetSize = 6;
+    const scale = targetSize / maxDim;
     obj.scale.setScalar(scale);
     obj.position.sub(center.multiplyScalar(scale));
+
+    // Auto-fit camera to fill viewport
+    const fovRad = (this.camera.fov * Math.PI) / 180;
+    const dist = (targetSize / 2) / Math.tan(fovRad / 2) * 1.1;
+    this.camera.position.set(dist * 0.55, dist * 0.35, dist * 0.75);
+    this.camera.lookAt(0, 0, 0);
+    this.controls.target.set(0, 0, 0);
+    this.controls.update();
 
     this.onResize();
   }
