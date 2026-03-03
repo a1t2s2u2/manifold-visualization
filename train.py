@@ -206,33 +206,38 @@ def train():
     print(f"\nFinal test accuracy: {final_accuracy:.4f}")
 
     # ============================================================
-    # PCA on path → directed perturbations along PC directions
+    # Helper: PCA projection (manual matmul to avoid sklearn overflow)
     # ============================================================
-    print("\nComputing PCA on optimization path...")
+    def pca_project_3d(weights_list: list[np.ndarray]):
+        """Fit PCA on given weights, return (projected, components, mean, variance)."""
+        arr = np.array(weights_list, dtype=np.float64)
+        mean = arr.mean(axis=0)
+        centered = arr - mean
+        pca = PCA(n_components=3, svd_solver="full")
+        pca.fit(centered)
+        projected = (centered @ pca.components_.T).tolist()
+        return projected, pca.components_, mean, pca.explained_variance_ratio_.tolist()
+
+    def project_with(weights_list: list[np.ndarray], components, mean):
+        arr = np.array(weights_list, dtype=np.float64)
+        return ((arr - mean) @ components.T).tolist()
+
+    # ============================================================
+    # LOCAL: PCA on path → directed perturbations along PC directions
+    # ============================================================
+    print("\n[Local] Computing PCA on optimization path...")
     path_array = np.array(path_weights, dtype=np.float64)
-    path_mean = path_array.mean(axis=0)
-    path_centered = path_array - path_mean
-    pca = PCA(n_components=3, svd_solver="full")
-    pca.fit(path_centered)
-    pc_dirs = pca.components_  # (3, 7840)
-    explained_variance = pca.explained_variance_ratio_.tolist()
-    print(f"  PCA explained variance: {explained_variance}")
+    local_path_3d, local_pcs, local_mean, local_variance = pca_project_3d(path_weights)
+    print(f"  PCA explained variance: {local_variance}")
 
-    # Project path to 3D (manual matmul to avoid sklearn overflow with large matrices)
-    path_3d = (path_centered @ pc_dirs.T).tolist()
-
-    # ============================================================
-    # Landscape sampling: perturbations along PCA directions
-    # ============================================================
-    print("\nSampling loss landscape (2000 points around optimization path)...")
+    print("[Local] Sampling 2000 perturbation points...")
     n_landscape = 2000
-    landscape_weights: list[np.ndarray] = []
-    landscape_losses_list: list[float] = []
+    local_weights: list[np.ndarray] = []
+    local_losses: list[float] = []
 
     path_tensors = [torch.from_numpy(w.reshape(10, 784)).float().to(device) for w in path_weights]
     n_path = len(path_tensors)
-    # Convert PC directions to torch tensors (reshaped to 10x784)
-    pc_tensors = [torch.from_numpy(pc.reshape(10, 784)).float().to(device) for pc in pc_dirs]
+    pc_tensors = [torch.from_numpy(pc.reshape(10, 784)).float().to(device) for pc in local_pcs]
 
     rng = np.random.RandomState(42)
     n_anchors = min(100, n_path)
@@ -247,29 +252,49 @@ def train():
             for _j in range(samples_per_anchor):
                 if count >= n_landscape:
                     break
-                # Perturb along the 3 PC directions with random coefficients
                 coeffs = rng.randn(3) * 0.3
                 delta = sum(c * pc for c, pc in zip(coeffs, pc_tensors))
-                # Project to tangent space and retract
                 delta_tan = stiefel_project_tangent(W_anchor, delta)
                 W_perturbed = stiefel_retract_qr(W_anchor + delta_tan)
                 logits = landscape_images @ W_perturbed.T
                 loss_val = F.cross_entropy(logits, landscape_labels).item()
-                landscape_weights.append(W_perturbed.cpu().numpy().flatten())
-                landscape_losses_list.append(loss_val)
+                local_weights.append(W_perturbed.cpu().numpy().flatten())
+                local_losses.append(loss_val)
                 count += 1
             if count >= n_landscape:
                 break
 
-    print(f"  {len(landscape_weights)} points sampled")
-
-    # Project landscape to same PCA space (manual matmul)
-    landscape_array = np.array(landscape_weights, dtype=np.float64)
-    landscape_centered = landscape_array - path_mean
-    landscape_3d = (landscape_centered @ pc_dirs.T).tolist()
+    local_landscape_3d = project_with(local_weights, local_pcs, local_mean)
+    print(f"  {len(local_weights)} points sampled")
 
     # ============================================================
-    # JSON output
+    # GLOBAL: uniform random on St(10, 784) with its own PCA
+    # ============================================================
+    print("\n[Global] Sampling 20000 uniform random points on St(10,784)...")
+    n_global = 20000
+    global_weights: list[np.ndarray] = []
+    global_losses: list[float] = []
+
+    with torch.no_grad():
+        for i in range(n_global):
+            W_rand = sample_stiefel(10, 784).to(device)
+            logits = landscape_images @ W_rand.T
+            loss_val = F.cross_entropy(logits, landscape_labels).item()
+            global_weights.append(W_rand.cpu().numpy().flatten())
+            global_losses.append(loss_val)
+            if (i + 1) % 2000 == 0:
+                print(f"  {i + 1}/{n_global} points sampled")
+
+    # PCA on global points only — captures the internal structure of random samples
+    print("[Global] Computing PCA on global points...")
+    _, global_pcs, global_mean, global_variance = pca_project_3d(global_weights)
+    print(f"  PCA explained variance: {global_variance}")
+
+    global_landscape_3d = project_with(global_weights, global_pcs, global_mean)
+    global_path_3d = project_with(path_weights, global_pcs, global_mean)
+
+    # ============================================================
+    # JSON output — each mode has its own PCA coordinate system
     # ============================================================
     output = {
         "metadata": {
@@ -278,15 +303,28 @@ def train():
             "learning_rate": lr,
             "final_accuracy": round(final_accuracy, 4),
             "final_loss": round(final_loss, 4),
-            "pca_explained_variance": [round(v, 6) for v in explained_variance],
         },
-        "landscape": {
-            "points": [[round(c, 6) for c in p] for p in landscape_3d],
-            "losses": [round(l, 6) for l in landscape_losses_list],
+        "local": {
+            "pca_explained_variance": [round(v, 6) for v in local_variance],
+            "landscape": {
+                "points": [[round(c, 6) for c in p] for p in local_landscape_3d],
+                "losses": [round(l, 6) for l in local_losses],
+            },
+            "path": {
+                "points": [[round(c, 6) for c in p] for p in local_path_3d],
+                "losses": [round(l, 4) for l in path_losses],
+            },
         },
-        "optimization_path": {
-            "points": [[round(c, 6) for c in p] for p in path_3d],
-            "losses": [round(l, 4) for l in path_losses],
+        "global": {
+            "pca_explained_variance": [round(v, 6) for v in global_variance],
+            "landscape": {
+                "points": [[round(c, 6) for c in p] for p in global_landscape_3d],
+                "losses": [round(l, 6) for l in global_losses],
+            },
+            "path": {
+                "points": [[round(c, 6) for c in p] for p in global_path_3d],
+                "losses": [round(l, 4) for l in path_losses],
+            },
         },
         "training_history": {
             "epoch_losses": [round(l, 4) for l in epoch_losses],
@@ -301,8 +339,8 @@ def train():
 
     file_size = out_path.stat().st_size / 1024
     print(f"\nSaved to {out_path} ({file_size:.1f} KB)")
-    print(f"  Landscape points: {len(landscape_3d)}")
-    print(f"  Path points: {len(path_3d)}")
+    print(f"  Local: {len(local_landscape_3d)} landscape + {len(local_path_3d)} path")
+    print(f"  Global: {len(global_landscape_3d)} landscape + {len(global_path_3d)} path")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { MnistStiefelData } from "./types";
+import type { ViewData, LandscapeMode, MnistStiefelData } from "./types";
 
 /**
  * Loss値 → HSL色 (青=低loss, 赤=高loss)
@@ -9,16 +9,23 @@ function lossToColor(t: number): THREE.Color {
   return new THREE.Color().setHSL(0.65 * (1 - t), 0.85, 0.5);
 }
 
+function lossToCSS(t: number): string {
+  const c = new THREE.Color().setHSL(0.65 * (1 - t), 0.85, 0.5);
+  return `rgb(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)})`;
+}
+
 /**
- * ランドスケープ点群を作成
+ * 点群を作成
  */
-export function createPointCloud(data: MnistStiefelData): THREE.Points {
-  const { points, losses } = data.landscape;
+function createPointCloud(view: ViewData): THREE.Points {
+  const { points, losses } = view.landscape;
   const n = points.length;
 
-  const minLoss = Math.min(...losses);
-  const maxLoss = Math.max(...losses);
-  const lossRange = maxLoss - minLoss || 1;
+  // Use percentile-based normalization for better contrast
+  const sorted = [...losses].sort((a, b) => a - b);
+  const p2 = sorted[Math.floor(n * 0.02)] ?? sorted[0]!;
+  const p98 = sorted[Math.floor(n * 0.98)] ?? sorted[n - 1]!;
+  const lossRange = p98 - p2 || 1;
 
   const positions = new Float32Array(n * 3);
   const colors = new Float32Array(n * 3);
@@ -29,7 +36,7 @@ export function createPointCloud(data: MnistStiefelData): THREE.Points {
     positions[i * 3 + 1] = y;
     positions[i * 3 + 2] = z;
 
-    const t = (losses[i]! - minLoss) / lossRange;
+    const t = Math.max(0, Math.min(1, (losses[i]! - p2) / lossRange));
     const color = lossToColor(t);
     colors[i * 3] = color.r;
     colors[i * 3 + 1] = color.g;
@@ -41,10 +48,10 @@ export function createPointCloud(data: MnistStiefelData): THREE.Points {
   geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
 
   const mat = new THREE.PointsMaterial({
-    size: 0.06,
+    size: 0.12,
     vertexColors: true,
     transparent: true,
-    opacity: 0.7,
+    opacity: 0.75,
     sizeAttenuation: true,
   });
 
@@ -54,102 +61,177 @@ export function createPointCloud(data: MnistStiefelData): THREE.Points {
 /**
  * 最適化パスの曲線 + 始点/終点マーカーを作成
  */
-export function createOptimizationPath(data: MnistStiefelData): THREE.Group {
-  const { points } = data.optimization_path;
+function createOptimizationPath(view: ViewData): THREE.Group {
+  const { points } = view.path;
+  const lPoints = view.landscape.points;
   const group = new THREE.Group();
 
   if (points.length < 2) return group;
 
-  // Gold line for optimization path
-  const linePositions: number[] = [];
-  for (const [x, y, z] of points) {
-    linePositions.push(x, y, z);
+  // Compute landscape spread and path spread
+  let lMinX = Infinity, lMaxX = -Infinity;
+  let lMinY = Infinity, lMaxY = -Infinity;
+  let lMinZ = Infinity, lMaxZ = -Infinity;
+  for (const [x, y, z] of lPoints) {
+    if (x < lMinX) lMinX = x; if (x > lMaxX) lMaxX = x;
+    if (y < lMinY) lMinY = y; if (y > lMaxY) lMaxY = y;
+    if (z < lMinZ) lMinZ = z; if (z > lMaxZ) lMaxZ = z;
   }
-  const lineGeo = new THREE.BufferGeometry();
-  lineGeo.setAttribute(
-    "position",
-    new THREE.Float32BufferAttribute(linePositions, 3)
-  );
-  const lineMat = new THREE.LineBasicMaterial({
-    color: 0xffd700,
-    linewidth: 2,
-  });
-  group.add(new THREE.Line(lineGeo, lineMat));
+  const landscapeSpread = Math.max(lMaxX - lMinX, lMaxY - lMinY, lMaxZ - lMinZ) || 1;
 
-  // Start point (red sphere)
-  const startGeo = new THREE.SphereGeometry(0.08, 12, 12);
-  const startMat = new THREE.MeshPhongMaterial({
-    color: 0xff1744,
-    emissive: 0xd50000,
-    emissiveIntensity: 0.5,
-    shininess: 80,
-  });
-  const startSphere = new THREE.Mesh(startGeo, startMat);
-  const [sx, sy, sz] = points[0]!;
-  startSphere.position.set(sx, sy, sz);
-  group.add(startSphere);
+  let pMinX = Infinity, pMaxX = -Infinity;
+  let pMinY = Infinity, pMaxY = -Infinity;
+  let pMinZ = Infinity, pMaxZ = -Infinity;
+  for (const [x, y, z] of points) {
+    if (x < pMinX) pMinX = x; if (x > pMaxX) pMaxX = x;
+    if (y < pMinY) pMinY = y; if (y > pMaxY) pMaxY = y;
+    if (z < pMinZ) pMinZ = z; if (z > pMaxZ) pMaxZ = z;
+  }
+  const pathSpread = Math.max(pMaxX - pMinX, pMaxY - pMinY, pMaxZ - pMinZ);
 
-  // End point (green sphere)
-  const endGeo = new THREE.SphereGeometry(0.08, 12, 12);
-  const endMat = new THREE.MeshPhongMaterial({
-    color: 0x00e676,
-    emissive: 0x00c853,
-    emissiveIntensity: 0.5,
-    shininess: 80,
-  });
-  const endSphere = new THREE.Mesh(endGeo, endMat);
-  const last = points[points.length - 1]!;
-  endSphere.position.set(last[0], last[1], last[2]);
-  group.add(endSphere);
+  // If path spread is tiny compared to landscape (global view),
+  // show a single "optimized W" marker instead of start/end
+  const isCompact = pathSpread < landscapeSpread * 0.05;
+  const markerRadius = landscapeSpread * 0.04;
+
+  if (isCompact) {
+    // Global view: prominent marker at final W position (white+magenta to contrast loss colors)
+    const last = points[points.length - 1]!;
+
+    // Inner bright white core
+    const coreGeo = new THREE.SphereGeometry(markerRadius, 16, 16);
+    const coreMat = new THREE.MeshPhongMaterial({
+      color: 0xffffff,
+      emissive: 0xff44ff,
+      emissiveIntensity: 1.0,
+      shininess: 120,
+    });
+    const core = new THREE.Mesh(coreGeo, coreMat);
+    core.position.set(last[0], last[1], last[2]);
+    group.add(core);
+
+    // Outer glow ring
+    const glowGeo = new THREE.RingGeometry(markerRadius * 1.8, markerRadius * 2.5, 32);
+    const glowMat = new THREE.MeshBasicMaterial({
+      color: 0xff44ff,
+      transparent: true,
+      opacity: 0.5,
+      side: THREE.DoubleSide,
+    });
+    const glow = new THREE.Mesh(glowGeo, glowMat);
+    glow.position.set(last[0], last[1], last[2]);
+    group.add(glow);
+
+    // Second ring perpendicular
+    const glow2 = new THREE.Mesh(glowGeo.clone(), glowMat.clone());
+    glow2.position.set(last[0], last[1], last[2]);
+    glow2.rotation.x = Math.PI / 2;
+    group.add(glow2);
+  } else {
+    // Local view: full path with start/end markers
+    const linePositions: number[] = [];
+    for (const [x, y, z] of points) {
+      linePositions.push(x, y, z);
+    }
+    const lineGeo = new THREE.BufferGeometry();
+    lineGeo.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(linePositions, 3)
+    );
+    const lineMat = new THREE.LineBasicMaterial({
+      color: 0xffd700,
+      linewidth: 2,
+    });
+    group.add(new THREE.Line(lineGeo, lineMat));
+
+    // Start point (red sphere)
+    const startGeo = new THREE.SphereGeometry(markerRadius, 12, 12);
+    const startMat = new THREE.MeshPhongMaterial({
+      color: 0xff1744,
+      emissive: 0xd50000,
+      emissiveIntensity: 0.5,
+      shininess: 80,
+    });
+    const startSphere = new THREE.Mesh(startGeo, startMat);
+    const [sx, sy, sz] = points[0]!;
+    startSphere.position.set(sx, sy, sz);
+    group.add(startSphere);
+
+    // End point (green sphere)
+    const endGeo = new THREE.SphereGeometry(markerRadius, 12, 12);
+    const endMat = new THREE.MeshPhongMaterial({
+      color: 0x00e676,
+      emissive: 0x00c853,
+      emissiveIntensity: 0.5,
+      shininess: 80,
+    });
+    const endSphere = new THREE.Mesh(endGeo, endMat);
+    const last = points[points.length - 1]!;
+    endSphere.position.set(last[0], last[1], last[2]);
+    group.add(endSphere);
+  }
 
   return group;
 }
 
-/**
- * カラーバー凡例 (3Dスプライト)
- */
-export function createColorBar(data: MnistStiefelData): THREE.Sprite {
-  const losses = data.landscape.losses;
-  const minLoss = Math.min(...losses);
-  const maxLoss = Math.max(...losses);
+// ============================================================
+// Color bar as DOM overlay (does not affect 3D auto-scaling)
+// ============================================================
 
-  const W = 64;
-  const H = 256;
-  const canvas = document.createElement("canvas");
-  canvas.width = W;
-  canvas.height = H;
-  const ctx = canvas.getContext("2d")!;
+const COLORBAR_ID = "colorbar-overlay";
 
-  // Gradient bar
-  for (let i = 0; i < H - 40; i++) {
-    const t = i / (H - 41);
-    const c = new THREE.Color().setHSL(0.65 * (1 - t), 0.85, 0.5);
-    ctx.fillStyle = `rgb(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)})`;
-    ctx.fillRect(8, 20 + i, 20, 1);
-  }
+export function removeColorBar(): void {
+  document.getElementById(COLORBAR_ID)?.remove();
+}
+
+function drawColorBar(view: ViewData): void {
+  removeColorBar();
+
+  const { losses } = view.landscape;
+  const n = losses.length;
+  const sorted = [...losses].sort((a, b) => a - b);
+  const minLoss = sorted[Math.floor(n * 0.02)] ?? sorted[0]!;
+  const maxLoss = sorted[Math.floor(n * 0.98)] ?? sorted[n - 1]!;
+
+  const container = document.createElement("div");
+  container.id = COLORBAR_ID;
+  container.style.cssText = `
+    position: fixed; top: 50%; right: 340px;
+    transform: translateY(-50%);
+    display: flex; align-items: center; gap: 6px;
+    background: rgba(18, 18, 26, 0.85);
+    border: 1px solid rgba(108, 92, 231, 0.4);
+    border-radius: 8px;
+    padding: 10px 12px;
+    pointer-events: none;
+    z-index: 10;
+    font-family: 'JetBrains Mono', monospace;
+  `;
+
+  // Gradient strip
+  const strip = document.createElement("div");
+  const gradH = 160;
+  strip.style.cssText = `
+    width: 14px; height: ${gradH}px; border-radius: 3px;
+    background: linear-gradient(to bottom, ${lossToCSS(1)}, ${lossToCSS(0.5)}, ${lossToCSS(0)});
+  `;
 
   // Labels
-  ctx.fillStyle = "#e0e0f0";
-  ctx.font = "11px monospace";
-  ctx.textAlign = "left";
-  ctx.fillText(maxLoss.toFixed(2), 32, 28);
-  ctx.fillText(((maxLoss + minLoss) / 2).toFixed(2), 32, 20 + (H - 40) / 2);
-  ctx.fillText(minLoss.toFixed(2), 32, H - 22);
+  const labels = document.createElement("div");
+  labels.style.cssText = `
+    display: flex; flex-direction: column;
+    justify-content: space-between;
+    height: ${gradH}px; font-size: 10px; color: #e0e0f0;
+  `;
+  labels.innerHTML = `
+    <span>${maxLoss.toFixed(2)}</span>
+    <span style="color:#8888aa;font-size:9px">Loss</span>
+    <span>${minLoss.toFixed(2)}</span>
+  `;
 
-  ctx.fillStyle = "#8888aa";
-  ctx.font = "9px monospace";
-  ctx.fillText("Loss", 8, 12);
-
-  const tex = new THREE.CanvasTexture(canvas);
-  const mat = new THREE.SpriteMaterial({
-    map: tex,
-    transparent: true,
-    opacity: 0.9,
-  });
-  const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(0.5, 2, 1);
-  sprite.position.set(-2.5, 0, 0);
-  return sprite;
+  container.appendChild(strip);
+  container.appendChild(labels);
+  document.body.appendChild(container);
 }
 
 /**
@@ -157,20 +239,18 @@ export function createColorBar(data: MnistStiefelData): THREE.Sprite {
  */
 export function buildVisualization(
   data: MnistStiefelData,
-  options: { showPath: boolean }
+  options: { showPath: boolean; landscapeMode: LandscapeMode }
 ): THREE.Group {
   const group = new THREE.Group();
+  const view = data[options.landscapeMode];
 
-  // Point cloud
-  const cloud = createPointCloud(data);
-  group.add(cloud);
+  group.add(createPointCloud(view));
 
-  // Color bar
-  group.add(createColorBar(data));
+  // Color bar as DOM overlay (no 3D bounding box impact)
+  drawColorBar(view);
 
-  // Optimization path
   if (options.showPath) {
-    group.add(createOptimizationPath(data));
+    group.add(createOptimizationPath(view));
   }
 
   return group;

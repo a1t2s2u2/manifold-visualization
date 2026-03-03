@@ -1,3 +1,14 @@
+export interface LandscapeData {
+  points: [number, number, number][];
+  losses: number[];
+}
+
+export interface ViewData {
+  pca_explained_variance: number[];
+  landscape: LandscapeData;
+  path: LandscapeData;
+}
+
 export interface MnistStiefelData {
   metadata: {
     model: string;
@@ -5,18 +16,13 @@ export interface MnistStiefelData {
     learning_rate: number;
     final_accuracy: number;
     final_loss: number;
-    pca_explained_variance: number[];
   };
-  landscape: {
-    points: [number, number, number][];
-    losses: number[];
-  };
-  optimization_path: {
-    points: [number, number, number][];
-    losses: number[];
-  };
+  local: ViewData;
+  global: ViewData;
   training_history: {
     epoch_losses: number[];
     epoch_accuracies: number[];
   };
 }
+
+export type LandscapeMode = "local" | "global";
